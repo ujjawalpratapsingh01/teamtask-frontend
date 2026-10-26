@@ -6,10 +6,17 @@ import LoginForm from '../components/LoginForm.jsx';
 
 export default function LoginPage({ onAuthSuccess }) {
   const navigate = useNavigate();
+
   return (
     <BotanicalBackground>
       <AuthCard title="Login" minHeightClass="min-h-[440px]">
-        <LoginForm onLoginSuccess={(s) => { onAuthSuccess(s); navigate('/dashboard', { replace: true }); }} onSwitchToRegister={() => navigate('/register')} />
+        <LoginForm
+          onLoginSuccess={(session) => {
+            onAuthSuccess(session);
+            navigate('/scan', { replace: true });
+          }}
+          onSwitchToRegister={() => navigate('/register')}
+        />
       </AuthCard>
     </BotanicalBackground>
   );
