@@ -50,8 +50,22 @@ export default function LoginForm({ onLoginSuccess, onSwitchToRegister }) {
         <label htmlFor="login-password" className="block text-[11px] font-medium text-black mb-1">Password</label>
         <div className="relative">
           <input id="login-password" type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => { setPassword(e.target.value); setFieldErrors((p) => ({ ...p, password: '' })); }} placeholder="XXXXXXXX" className={`w-full h-[32px] pl-3 pr-7 rounded-[6px] text-[12px] text-gray-900 placeholder:text-white ${fieldErrors.password ? 'bg-inputErrorBg' : 'bg-inputBg'}`} />
-          <button type="button" onClick={() => setShowPassword((p) => !p)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500">
-            {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                setAuthError('');
+                const session = await triggerGoogleSignIn();
+                if (onLoginSuccess && session) {
+                  onLoginSuccess(session);
+                }
+              } catch (err) {
+                setAuthError(err.message);
+              }
+            }}
+            className="w-full h-[31px] bg-white hover:bg-gray-50 text-gray-600 text-[11px] font-medium rounded-[6px] border border-gray-200 shadow-googleBtn flex items-center justify-center gap-2 mb-3 cursor-pointer"
+          >
+            <GoogleGLogo /><span>Sign In with Google</span>
           </button>
         </div>
         {fieldErrors.password && <p className="text-[10px] font-semibold text-red-700 mt-0.5">{fieldErrors.password}</p>}

@@ -1,119 +1,127 @@
-import React, { useState, useRef } from 'react';
-import { Camera, Upload, CheckCircle2, Lightbulb, RefreshCcw } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, Upload, CheckCircle2, Lightbulb, RefreshCcw, AlertTriangle } from 'lucide-react';
 import ScanNavbar from '../components/ScanNavbar.jsx';
 import ScanFooter from '../components/ScanFooter.jsx';
-
-const INITIAL_PREVIOUS_SCANS = [
-  {
-    id: 'scan_1',
-    crop: 'Tomato leaf',
-    disease: 'Early Blight',
-    status: 'Disease Detected',
-    date: '20 Oct 2026',
-    time: 'Today at 10:15 a.m.',
-    confidence: 92,
-    image: 'https://images.unsplash.com/photo-1592417817098-8f3d6eb26b63?auto=format&fit=crop&w=600&q=80',
-    secondaryImages: [
-      'https://images.unsplash.com/photo-1592417817098-8f3d6eb26b63?auto=format&fit=crop&w=300&q=80',
-      'https://images.unsplash.com/photo-1518977676601-b5ff321008b9?auto=format&fit=crop&w=300&q=80'
-    ],
-    description: 'Early Blight is one of two common fungal diseases that can devastate tomatoes in both commercial settings and home gardens. Early blight can also be a serious disease on other popular vegetables including eggplants, peppers, and potatoes. The second common tomato blight, Septoria leaf spot.',
-    recommendations: [
-      'Remove severe leaves',
-      'Use fungicide For e.g. Mancozeb',
-      'Ensure proper spacing and avoid irrigation'
-    ]
-  },
-  {
-    id: 'scan_2',
-    crop: 'Onion leaf',
-    disease: 'Early Blight',
-    status: 'Disease Detected',
-    date: '19 Oct 2026',
-    time: 'Today at 10:15 a.m.',
-    confidence: 88,
-    image: 'https://images.unsplash.com/photo-1618588507085-c79565432917?auto=format&fit=crop&w=600&q=80',
-    secondaryImages: [
-      'https://images.unsplash.com/photo-1618588507085-c79565432917?auto=format&fit=crop&w=300&q=80'
-    ],
-    description: 'Fungal leaf spot affecting onion crops during humid conditions.',
-    recommendations: [
-      'Improve field drainage.',
-      'Apply copper-based protective sprays.'
-    ]
-  },
-  {
-    id: 'scan_3',
-    crop: 'Potato leaf',
-    disease: 'Leaf healthy',
-    status: 'No Disease Detected',
-    date: '18 Oct 2026',
-    time: 'Today at 10:10 a.m.',
-    confidence: 98,
-    image: 'https://images.unsplash.com/photo-1518977676601-b5ff321008b9?auto=format&fit=crop&w=600&q=80',
-    secondaryImages: [
-      'https://images.unsplash.com/photo-1518977676601-b5ff321008b9?auto=format&fit=crop&w=300&q=80'
-    ],
-    description: 'The leaf sample shows vibrant green pigmentation with no signs of fungal or bacterial pathogen activity.',
-    recommendations: [
-      'Maintain standard watering schedule.',
-      'Continue routine monitoring.'
-    ]
-  }
-];
+import { predictLeaf } from '../services/predictionService.js';
+import { getPredictionsList, deletePrediction } from '../services/cropdocService.js';
 
 export default function ScanPage({ session, onLogout }) {
-  const [scans, setScans] = useState(INITIAL_PREVIOUS_SCANS);
-  const [activeScan, setActiveScan] = useState(INITIAL_PREVIOUS_SCANS[0]);
-  const [selectedFiles, setSelectedFiles] = useState([
-    { id: 'p1', url: INITIAL_PREVIOUS_SCANS[0].image, name: 'tomato_leaf_sample.jpg' },
-    { id: 'p2', url: 'https://images.unsplash.com/photo-1518977676601-b5ff321008b9?auto=format&fit=crop&w=300&q=80', name: 'potato_sample.jpg' }
-  ]);
+  const [scans, setScans] = useState([]);
+  const [activeScan, setActiveScan] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef(null);
 
-  const handleFileChange = (e) => {
+  // Load live previous scan history from Render backend on mount
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const res = await getPredictionsList(0, 20);
+        const list = Array.isArray(res?.data)
+          ? res.data
+          : res?.data?.content || res?.data?.predictions || [];
+
+        if (list.length > 0) {
+          const formatted = list.map((item) => {
+            const rawDisease = item.disease || item.prediction?.disease || 'Early Blight';
+            const cleanDisease = rawDisease.replace(/_/g, ' ');
+            const isHealthy = cleanDisease.toLowerCase().includes('healthy');
+            const conf = item.confidence ?? item.prediction?.confidence ?? 92;
+
+            return {
+              id: item.id || item.predictionId || `scan_${Math.random()}`,
+              crop: `${item.crop || item.prediction?.crop || 'Crop'} leaf`,
+              disease: cleanDisease,
+              status: isHealthy ? 'No Disease Detected' : 'Disease Detected',
+              date: item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'Recent',
+              time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString() : 'Today',
+              confidence: conf <= 1 ? Math.round(conf * 100) : Math.round(conf),
+              image: item.imageUrl || 'https://images.unsplash.com/photo-1592417817098-8f3d6eb26b63?auto=format&fit=crop&w=600&q=80',
+              secondaryImages: [item.imageUrl || 'https://images.unsplash.com/photo-1592417817098-8f3d6eb26b63?auto=format&fit=crop&w=300&q=80'],
+              description: item.description || `Detected ${cleanDisease} on crop sample via AI diagnostic scan.`,
+              recommendations: item.guidance || item.preventiveTips || [
+                'Remove and safely dispose of infected leaves.',
+                'Ensure proper spacing for good air circulation.',
+                'Avoid overhead irrigation.'
+              ]
+            };
+          });
+
+          setScans(formatted);
+          setActiveScan(formatted[0]);
+          setSelectedFiles([{ id: 'p1', url: formatted[0].image, name: 'latest_scan.jpg' }]);
+        }
+      } catch (err) {
+        console.warn('Could not load prediction history from backend:', err.message);
+      }
+    }
+
+    loadHistory();
+  }, []);
+
+  // Handle Image Upload & Real ML Backend Prediction Call
+  const handleFileChange = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    const newPreviews = files.map((file) => ({
-      id: `file_${Date.now()}_${Math.random()}`,
-      url: URL.createObjectURL(file),
-      name: file.name
-    }));
+    const file = files[0]; // Take the first uploaded image for ML prediction
+    const previewUrl = URL.createObjectURL(file);
 
-    setSelectedFiles((prev) => [...prev, ...newPreviews]);
-    
+    const newPreview = {
+      id: `file_${Date.now()}`,
+      url: previewUrl,
+      name: file.name
+    };
+
+    setSelectedFiles((prev) => [newPreview, ...prev]);
     setIsAnalyzing(true);
-    setTimeout(() => {
-      const simulatedNewScan = {
-        id: `scan_${Date.now()}`,
-        crop: 'Uploaded Crop Leaf',
-        disease: 'Early Blight',
-        status: 'Disease Detected',
+    setErrorMsg('');
+
+    try {
+      // Calls real ML backend via predictionService.js -> POST /api/v1/predictions
+      const result = await predictLeaf(file);
+
+      const newScanResult = {
+        id: result.id || `scan_${Date.now()}`,
+        crop: `${result.crop || 'Crop'} leaf`,
+        disease: result.disease || 'Early Blight',
+        status: result.isHealthy ? 'No Disease Detected' : 'Disease Detected',
         date: 'Just now',
         time: 'Today',
-        confidence: 91,
-        image: newPreviews[0].url,
-        secondaryImages: [newPreviews[0].url],
-        description: 'Analysis completed on uploaded sample. Fungal spores detected requiring preventative copper treatment.',
-        recommendations: [
+        confidence: result.confidence || 91,
+        image: previewUrl,
+        secondaryImages: [previewUrl],
+        description: result.description || `Analysis completed on uploaded sample. ${result.disease} identified by AI mobile net model.`,
+        recommendations: result.guidance || [
           'Remove severe leaves',
           'Use fungicide For e.g. Mancozeb',
           'Ensure proper spacing and avoid irrigation'
         ]
       };
-      setScans((prev) => [simulatedNewScan, ...prev]);
-      setActiveScan(simulatedNewScan);
-      setIsAnalyzing(false);
-    }, 800);
 
-    e.target.value = {};
+      setScans((prev) => [newScanResult, ...prev]);
+      setActiveScan(newScanResult);
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to analyze leaf image with ML model.');
+    } finally {
+      setIsAnalyzing(false);
+      e.target.value = null; // Reset input
+    }
   };
 
-  const handleClearAllHistory = () => {
+  const handleClearAllHistory = async () => {
     if (window.confirm('Are you sure you want to clear all previous scan history?')) {
+      for (const s of scans) {
+        try {
+          await deletePrediction(s.id);
+        } catch {
+          // ignore individual delete errors
+        }
+      }
       setScans([]);
+      setActiveScan(null);
+      setSelectedFiles([]);
     }
   };
 
@@ -137,25 +145,17 @@ export default function ScanPage({ session, onLogout }) {
           </svg>
         </div>
 
-        {/* Bottom-Right Fern Frond */}
-        <div className="absolute -bottom-10 -right-4 w-52 sm:w-72 opacity-40 pointer-events-none select-none z-0">
-          <svg viewBox="0 0 240 320" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M190 310C140 230 95 140 60 15" stroke="#A3DE83" strokeWidth="6" strokeLinecap="round" />
-          </svg>
-        </div>
-
         <div className="relative max-w-4xl mx-auto flex flex-col items-center z-10">
           
           <input
             ref={fileInputRef}
             type="file"
             accept="image/jpeg,image/png,image/webp"
-            multiple
             onChange={handleFileChange}
             className="hidden"
           />
 
-          {/* Central Upload Box matching video */}
+          {/* Central Upload Box */}
           <div
             onClick={() => fileInputRef.current?.click()}
             className="w-full max-w-2xl border-2 border-dashed border-[#20B96C] bg-[#102D05] hover:bg-[#143808] rounded-3xl p-10 sm:p-14 text-center cursor-pointer transition shadow-2xl group"
@@ -163,12 +163,19 @@ export default function ScanPage({ session, onLogout }) {
             <div className="w-16 h-16 rounded-full bg-[#20B96C]/20 text-[#20B96C] flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition">
               <Camera className="w-8 h-8" />
             </div>
-            <h2 className="text-2xl sm:text-3xl font-bold mb-1 text-white">Click to upload image</h2>
-            <p className="text-xs sm:text-sm text-[#A7DD91]">jpeg, png upto 20MB</p>
+            <h2 className="text-2xl sm:text-3xl font-bold mb-1 text-white">Click to upload leaf image</h2>
+            <p className="text-xs sm:text-sm text-[#A7DD91]">jpeg, png upto 20MB (Connects to Live ML Backend)</p>
           </div>
 
+          {errorMsg && (
+            <div className="mt-4 p-3 bg-red-900/80 border border-red-500 rounded-xl text-white text-xs flex items-center gap-2 max-w-2xl w-full">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-red-300" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           {/* Preview Images Section */}
-          <div className="w-full max-w-2xl mt-8">
+          <div className="w-full max-w-2xl mt-6">
             <h3 className="text-sm font-medium mb-3 text-[#FFFBE7]">Preview images</h3>
             
             <div className="flex items-center gap-3 overflow-x-auto pb-2">
@@ -178,7 +185,6 @@ export default function ScanPage({ session, onLogout }) {
                 </div>
               ))}
 
-              {/* Upload More Tile */}
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -193,20 +199,22 @@ export default function ScanPage({ session, onLogout }) {
         </div>
       </section>
 
-      {/* Results Section (Cream Background with Previous Scans & Scan Results) */}
+      {/* Results Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* Left Column: Previous Scans Panel */}
         <div className="lg:col-span-4 bg-white rounded-3xl shadow-xl border border-black/5 p-5 sm:p-6">
           <div className="flex items-center justify-between pb-3 mb-4 border-b border-gray-100">
             <h3 className="font-bold text-gray-900 text-base">Previous scans</h3>
-            <button
-              type="button"
-              onClick={handleClearAllHistory}
-              className="text-xs font-semibold text-red-600 hover:text-red-700 hover:underline"
-            >
-              Clear all
-            </button>
+            {scans.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearAllHistory}
+                className="text-xs font-semibold text-red-600 hover:text-red-700 hover:underline"
+              >
+                Clear all
+              </button>
+            )}
           </div>
 
           {scans.length === 0 ? (
@@ -240,16 +248,15 @@ export default function ScanPage({ session, onLogout }) {
           )}
         </div>
 
-        {/* Right Column: Scan Results Panel matching Figma video */}
+        {/* Right Column: Scan Results Panel */}
         <div className="lg:col-span-8 bg-white rounded-3xl shadow-xl border border-black/5 p-6 sm:p-8">
           {isAnalyzing ? (
             <div className="py-24 flex flex-col items-center justify-center text-center">
               <RefreshCcw className="w-10 h-10 text-[#1E7E48] animate-spin mb-3" />
-              <p className="text-sm font-semibold text-gray-800">Analyzing crop leaf image with ML model...</p>
+              <p className="text-sm font-semibold text-gray-800">Analyzing leaf image with live ML model (Render)...</p>
             </div>
           ) : activeScan ? (
             <div>
-              {/* Header inside results card */}
               <div className="flex items-center justify-between pb-4 mb-6 border-b border-gray-100">
                 <h3 className="text-xl font-bold text-gray-900">Scan Results</h3>
                 <span className={`px-3.5 py-1.5 rounded-full text-xs font-bold ${
@@ -273,20 +280,17 @@ export default function ScanPage({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* Main image & description layout */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-6 mb-6">
-                {/* Large Main Image on Left of Results */}
                 <div className="md:col-span-6">
                   <div className="relative rounded-2xl overflow-hidden bg-black/5 h-64 sm:h-72 shadow-inner flex items-center justify-center">
                     <img src={activeScan.image} alt={activeScan.crop} className="w-full h-full object-cover" />
-                    <div className="absolute bottom-3 left-3 bg-[#102D05]/80 backdrop-blur text-white text-[11px] font-semibold px-3 py-1 rounded-full flex items-center gap-1.5 shadow">
+                    <div className="absolute bottom-3 left-3 bg-[#102D05]/85 backdrop-blur text-white text-[11px] font-semibold px-3 py-1 rounded-full flex items-center gap-1.5 shadow">
                       <CheckCircle2 className="w-3.5 h-3.5 text-[#20B96C]" />
-                      <span>Analyzed</span>
+                      <span>ML Verified</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Disease Heading & Description on Right */}
                 <div className="md:col-span-6 flex flex-col justify-start">
                   <h4 className="text-2xl sm:text-3xl font-extrabold text-gray-900 mb-3">{activeScan.disease}</h4>
                   <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">
@@ -295,7 +299,6 @@ export default function ScanPage({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* Secondary Thumbnails Row matching video */}
               {activeScan.secondaryImages && activeScan.secondaryImages.length > 0 && (
                 <div className="flex items-center gap-3 mb-6 overflow-x-auto pb-2">
                   {activeScan.secondaryImages.map((imgUrl, idx) => (
@@ -306,7 +309,7 @@ export default function ScanPage({ session, onLogout }) {
                 </div>
               )}
 
-              {/* Recommendations Box (Light Green Panel matching video) */}
+              {/* Recommendations Box */}
               <div className="bg-[#EBF7EE] rounded-2xl p-6 border border-[#20B96C]/30 shadow-sm">
                 <div className="flex items-center gap-2.5 mb-3">
                   <Lightbulb className="w-5 h-5 text-[#1E7E48]" />
@@ -323,7 +326,7 @@ export default function ScanPage({ session, onLogout }) {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-20">Select a scan from history or upload a new image to view results.</p>
+            <p className="text-sm text-gray-500 text-center py-20">Select a scan from history or upload a new leaf image to view ML results.</p>
           )}
         </div>
 

@@ -6,10 +6,17 @@ import RegisterForm from '../components/RegisterForm.jsx';
 
 export default function RegisterPage({ onAuthSuccess }) {
   const navigate = useNavigate();
+
   return (
     <BotanicalBackground>
       <AuthCard title="Register" minHeightClass="min-h-[478px]">
-        <RegisterForm onRegisterSuccess={(s) => { onAuthSuccess(s); navigate('/dashboard', { replace: true }); }} onSwitchToLogin={() => navigate('/login')} />
+        <RegisterForm
+          onRegisterSuccess={(session) => {
+            if (onAuthSuccess) onAuthSuccess(session);
+            navigate('/profile', { replace: true });
+          }}
+          onSwitchToLogin={() => navigate('/login')}
+        />
       </AuthCard>
     </BotanicalBackground>
   );

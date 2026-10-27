@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
 import ForgotPasswordPage from './pages/ForgotPasswordPage.jsx';
-import LandingPage from './pages/LandingPage.jsx'; // Aapka Landing page
+import LandingPage from './pages/LandingPage.jsx';
 import ScanPage from './pages/ScanPage.jsx';
 import { getActiveSession, logoutUser } from './services/authService.js';
 import AboutPage from './pages/AboutPage.jsx';
@@ -19,9 +19,13 @@ export default function App() {
     navigate('/landing', { replace: true });
   };
 
+  const handleAuthSuccess = (newSession) => {
+    setSession(newSession);
+    navigate('/profile', { replace: true });
+  };
+
   return (
     <Routes>
-      {/* Sabse pehle Landing Page open hoga */}
       <Route path="/" element={<LandingPage session={session} />} />
       <Route path="/landing" element={<LandingPage session={session} />} />
       <Route
@@ -32,27 +36,28 @@ export default function App() {
         path="/profile"
         element={<ProfilePage session={session} onLogout={handleLogout} />}
       />
+      {/* Agar koi component /dashboard par bheje toh bhi Profile khulega */}
+      <Route
+        path="/dashboard"
+        element={<Navigate to="/profile" replace />}
+      />
 
       <Route
         path="/login"
-        element={<LoginPage onAuthSuccess={(s) => { setSession(s); navigate('/scan', { replace: true }); }} />}
+        element={<LoginPage onAuthSuccess={handleAuthSuccess} />}
       />
       <Route
         path="/register"
-        element={<RegisterPage onAuthSuccess={(s) => { setSession(s); navigate('/scan', { replace: true }); }} />}
+        element={<RegisterPage onAuthSuccess={handleAuthSuccess} />}
       />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
-      {/* Video wala Scan Page */}
       <Route
         path="/scan"
         element={<ScanPage session={session} onLogout={handleLogout} />}
       />
 
       <Route path="*" element={<Navigate to="/" replace />} />
-      
     </Routes>
-    
-    
   );
 }

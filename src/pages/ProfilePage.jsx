@@ -13,6 +13,14 @@ import {
 } from 'lucide-react';
 import ScanNavbar from '../components/ScanNavbar.jsx';
 import ScanFooter from '../components/ScanFooter.jsx';
+import {
+  getMyProfile,
+  updateMyProfile,
+  getMyPreferences,
+  updateMyPreferences,
+  getPredictionsList,
+  deletePrediction
+} from '../services/cropdocService.js';
 
 const INITIAL_PROFILE_SCANS = [
   {
@@ -54,28 +62,29 @@ export default function ProfilePage({ session, onLogout }) {
   const navigate = useNavigate();
   const avatarInputRef = useRef(null);
 
-  // Load saved profile from localStorage or default to screenshot values
   const [profile, setProfile] = useState(() => {
+    // 1. Always prioritize logged-in user from session prop or session storage
+    const activeUser = session?.user;
+    let savedProfile = {};
     try {
-      const saved = localStorage.getItem('cropdoc_user_profile');
-      if (saved) return JSON.parse(saved);
+      savedProfile = JSON.parse(localStorage.getItem('cropdoc_user_profile') || '{}');
     } catch {
-      // ignore storage errors
+      // ignore
     }
+
     return {
-      name: 'Aryansh Singh',
-      email: 'aryansh_singh@gmail.com',
-      phone: '7505xxxxx',
+      name: activeUser?.name || activeUser?.fullName || savedProfile.name || 'Aryansh Singh',
+      email: activeUser?.email || savedProfile.email || 'aryansh_singh@gmail.com',
+      phone: savedProfile.phone || '7505xxxxx',
       avatar:
+        savedProfile.avatar ||
         'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80'
     };
   });
 
-  // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
   const [draftProfile, setDraftProfile] = useState(profile);
 
-  // Preferences state
   const [preferences, setPreferences] = useState(() => {
     try {
       const saved = localStorage.getItem('cropdoc_user_prefs');
@@ -90,10 +99,89 @@ export default function ProfilePage({ session, onLogout }) {
     };
   });
 
-  // Previous scans state
   const [scans, setScans] = useState(INITIAL_PROFILE_SCANS);
 
-  // Persist profile changes
+  // Sync when session prop changes
+  useEffect(() => {
+    if (session?.user) {
+      setProfile((prev) => {
+        const next = {
+          ...prev,
+          name: session.user.name || session.user.fullName || prev.name,
+          email: session.user.email || prev.email
+        };
+        setDraftProfile(next);
+        return next;
+      });
+    }
+  }, [session]);
+
+  // Fetch live profile, preferences & scan history from Render backend
+  useEffect(() => {
+    async function syncFromBackend() {
+      try {
+        const res = await getMyProfile();
+        if (res?.data) {
+          setProfile((prev) => {
+            const next = {
+              ...prev,
+              name: res.data.fullName || res.data.name || prev.name,
+              email: res.data.email || prev.email
+            };
+            setDraftProfile(next);
+            return next;
+          });
+        }
+      } catch {
+        // fallback to session data
+      }
+
+      try {
+        const prefRes = await getMyPreferences();
+        if (prefRes?.data) {
+          setPreferences((prev) => ({
+            ...prev,
+            notifications: Boolean(prefRes.data.notifications ?? prev.notifications),
+            emailUpdates: Boolean(prefRes.data.emailUpdates ?? prev.emailUpdates),
+            language: prefRes.data.language === 'hi' ? 'Hindi' : 'English'
+          }));
+        }
+      } catch {
+        // fallback to local prefs
+      }
+
+      try {
+        const predRes = await getPredictionsList(0, 20);
+        const list = Array.isArray(predRes?.data)
+          ? predRes.data
+          : predRes?.data?.content || predRes?.data?.predictions || [];
+        if (list.length > 0) {
+          const mapped = list.map((item) => {
+            const rawDisease = item.disease || item.prediction?.disease || 'Early Blight';
+            const cleanDisease = rawDisease.replace(/_/g, ' ');
+            const isHealthy = cleanDisease.toLowerCase().includes('healthy');
+            return {
+              id: item.id || item.predictionId || Math.random().toString(),
+              crop: `${item.crop || item.prediction?.crop || 'Crop'} leaf`,
+              time: item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Recent',
+              statusLabel: isHealthy ? 'No decease detected' : 'Desease Detected',
+              disease: isHealthy ? 'Leaf healthy' : cleanDisease,
+              isHealthy,
+              image:
+                item.imageUrl ||
+                'https://images.unsplash.com/photo-1518977676601-b5ff321008b9?auto=format&fit=crop&w=300&q=80'
+            };
+          });
+          setScans(mapped);
+        }
+      } catch {
+        // keep initial scans if backend history is empty/offline
+      }
+    }
+
+    syncFromBackend();
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem('cropdoc_user_profile', JSON.stringify(profile));
@@ -102,7 +190,6 @@ export default function ProfilePage({ session, onLogout }) {
     }
   }, [profile]);
 
-  // Persist preference changes
   useEffect(() => {
     try {
       localStorage.setItem('cropdoc_user_prefs', JSON.stringify(preferences));
@@ -116,11 +203,16 @@ export default function ProfilePage({ session, onLogout }) {
     setIsEditing(true);
   };
 
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!draftProfile.name.trim()) return;
     setProfile(draftProfile);
     setIsEditing(false);
+    try {
+      await updateMyProfile({ fullName: draftProfile.name.trim() });
+    } catch {
+      // saved locally even if backend fails
+    }
   };
 
   const handleCancelEdit = () => {
@@ -136,40 +228,53 @@ export default function ProfilePage({ session, onLogout }) {
     setDraftProfile((prev) => ({ ...prev, avatar: url }));
   };
 
-  const togglePreference = (key) => {
-    setPreferences((prev) => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
+  const togglePreference = async (key) => {
+    const updated = { ...preferences, [key]: !preferences[key] };
+    setPreferences(updated);
+    try {
+      await updateMyPreferences(updated);
+    } catch {
+      // saved locally
+    }
   };
 
-  const cycleLanguage = () => {
+  const cycleLanguage = async () => {
     const langs = ['English', 'Hindi', 'Punjabi'];
-    setPreferences((prev) => {
-      const nextIndex = (langs.indexOf(prev.language) + 1) % langs.length;
-      return { ...prev, language: langs[nextIndex] };
-    });
+    const nextIndex = (langs.indexOf(preferences.language) + 1) % langs.length;
+    const updated = { ...preferences, language: langs[nextIndex] };
+    setPreferences(updated);
+    try {
+      await updateMyPreferences({
+        ...updated,
+        languageCode: updated.language === 'Hindi' ? 'hi' : 'en'
+      });
+    } catch {
+      // saved locally
+    }
   };
 
-  const handleClearScans = () => {
+  const handleClearScans = async () => {
     if (window.confirm('Are you sure you want to clear all previous scans?')) {
+      for (const s of scans) {
+        try {
+          await deletePrediction(s.id);
+        } catch {
+          // ignore
+        }
+      }
       setScans([]);
     }
   };
 
   return (
     <div className="min-h-screen bg-[#FFFBE7] flex flex-col font-sans text-[#0D3006]">
-      {/* Top Navbar */}
       <ScanNavbar session={session} onLogout={onLogout} />
 
-      {/* Main Content Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 sm:px-12 pt-8 pb-16">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
           
-          {/* ================= LEFT COLUMN (7 Cols): My Profile + Preferences ================= */}
+          {/* LEFT COLUMN */}
           <div className="lg:col-span-7">
-            
-            {/* Header Row: "My Profile" + "Edit Profile" Button */}
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <h1 className="text-4xl sm:text-5xl font-extrabold text-[#102D05] tracking-tight">
                 My Profile
@@ -206,11 +311,10 @@ export default function ProfilePage({ session, onLogout }) {
               )}
             </div>
 
-            {/* Card 1: User Details Card (#E6F0D5) */}
+            {/* User Details Card */}
             <div className="bg-[#E6F0D5] rounded-3xl p-6 sm:p-8 shadow-md border border-[#102D05]/5 mb-8">
               <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 sm:gap-8">
                 
-                {/* Circular Avatar */}
                 <div className="relative group shrink-0">
                   <input
                     ref={avatarInputRef}
@@ -235,11 +339,9 @@ export default function ProfilePage({ session, onLogout }) {
                   </div>
                 </div>
 
-                {/* Name, Email, Phone Details with Dividers */}
                 <div className="flex-1 w-full">
                   {!isEditing ? (
                     <>
-                      {/* Name Row */}
                       <div className="flex items-center justify-between pb-3.5 border-b border-[#102D05]/30">
                         <h2 className="text-2xl sm:text-3xl font-extrabold text-[#102D05]">
                           {profile.name}
@@ -254,7 +356,6 @@ export default function ProfilePage({ session, onLogout }) {
                         </button>
                       </div>
 
-                      {/* Email Row */}
                       <div className="flex items-center gap-4 py-4 border-b border-[#102D05]/30">
                         <Mail className="w-6 h-6 text-[#3E5F37] shrink-0 stroke-[1.75]" />
                         <a
@@ -265,7 +366,6 @@ export default function ProfilePage({ session, onLogout }) {
                         </a>
                       </div>
 
-                      {/* Phone Row */}
                       <div className="flex items-center gap-4 py-4 border-b border-[#102D05]/30">
                         <Phone className="w-6 h-6 text-[#3E5F37] shrink-0 stroke-[1.75]" />
                         <span className="text-sm sm:text-base font-bold text-[#102D05]">
@@ -274,7 +374,6 @@ export default function ProfilePage({ session, onLogout }) {
                       </div>
                     </>
                   ) : (
-                    /* Editable Form Inputs */
                     <form onSubmit={handleSaveEdit} className="space-y-3">
                       <div>
                         <label className="block text-xs font-bold text-[#102D05]/70 mb-1">
@@ -322,9 +421,8 @@ export default function ProfilePage({ session, onLogout }) {
               </div>
             </div>
 
-            {/* Card 2: Preferences Card (#E6F0D5) */}
+            {/* Preferences Card */}
             <div className="bg-[#E6F0D5] rounded-3xl p-6 sm:p-8 shadow-md border border-[#102D05]/5">
-              {/* Preferences Header */}
               <div className="flex items-center justify-between pb-3.5 border-b border-[#102D05]/30">
                 <h2 className="text-2xl sm:text-3xl font-extrabold text-[#102D05]">
                   Preferences
@@ -332,7 +430,6 @@ export default function ProfilePage({ session, onLogout }) {
                 <Settings className="w-7 h-7 text-[#4F6F46] stroke-[1.75]" />
               </div>
 
-              {/* Row 1: Notification Toggle */}
               <div className="flex items-center justify-between py-4 border-b border-[#102D05]/30">
                 <div className="flex items-center gap-4">
                   <Bell className="w-6 h-6 text-[#102D05] fill-[#102D05]" />
@@ -357,7 +454,6 @@ export default function ProfilePage({ session, onLogout }) {
                 </button>
               </div>
 
-              {/* Row 2: Email Updates Toggle */}
               <div className="flex items-center justify-between py-4 border-b border-[#102D05]/30">
                 <div className="flex items-center gap-4">
                   <Mail className="w-6 h-6 text-[#3E5F37] stroke-[1.75]" />
@@ -382,7 +478,6 @@ export default function ProfilePage({ session, onLogout }) {
                 </button>
               </div>
 
-              {/* Row 3: Language */}
               <div
                 onClick={cycleLanguage}
                 className="flex items-center justify-between py-4 border-b border-[#102D05]/30 cursor-pointer hover:opacity-80 transition"
@@ -402,11 +497,10 @@ export default function ProfilePage({ session, onLogout }) {
 
           </div>
 
-          {/* ================= RIGHT COLUMN (5 Cols): Previous Scans Card ================= */}
+          {/* RIGHT COLUMN: Previous Scans */}
           <div className="lg:col-span-5 lg:mt-6">
             <div className="bg-white rounded-3xl p-6 sm:p-7 shadow-lg border border-black/5">
               
-              {/* Header: Previous scans + Clear all */}
               <div className="flex items-center justify-between mb-5">
                 <h2 className="text-lg sm:text-xl font-extrabold text-[#102D05]">
                   Previous scans
@@ -420,7 +514,6 @@ export default function ProfilePage({ session, onLogout }) {
                 </button>
               </div>
 
-              {/* Scan Cards List */}
               {scans.length === 0 ? (
                 <div className="py-16 text-center text-sm text-gray-500">
                   No previous scans available.
@@ -446,7 +539,6 @@ export default function ProfilePage({ session, onLogout }) {
                             {scan.time}
                           </p>
 
-                          {/* Status Pill */}
                           <span
                             className={`inline-block px-3 py-0.5 rounded-full text-[11px] font-extrabold mb-1.5 ${
                               scan.isHealthy
@@ -457,7 +549,6 @@ export default function ProfilePage({ session, onLogout }) {
                             {scan.statusLabel}
                           </span>
 
-                          {/* Disease / Healthy Title */}
                           <p
                             className={`text-base sm:text-lg font-extrabold truncate ${
                               scan.isHealthy ? 'text-[#102D05]' : 'text-[#B91C1C]'
@@ -468,7 +559,6 @@ export default function ProfilePage({ session, onLogout }) {
                         </div>
                       </div>
 
-                      {/* Subtle Divider Line between cards just like the screenshot */}
                       {index < scans.length - 1 && (
                         <div className="w-4/5 mx-auto border-b border-[#102D05]/40 my-2" />
                       )}
@@ -483,7 +573,6 @@ export default function ProfilePage({ session, onLogout }) {
         </div>
       </main>
 
-      {/* Bottom Dark Green Footer */}
       <ScanFooter />
     </div>
   );
